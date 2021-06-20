@@ -1,0 +1,238 @@
+#######################
+### LOAD URL IMAGES ###
+#######################
+
+## Import modules ##
+import splitfolders
+import pandas as pd
+import urllib.request
+import os
+os.environ['KMP_DUPLICATE_LIB_OK']='True'
+
+from PIL import Image
+from matplotlib import pyplot as plt
+from urllib.error import HTTPError
+
+## Set working directory ##
+os.chdir("/Users/gustavchristensen/Desktop/TechLabs/AI/Data/")
+os.getcwd()
+
+## Other pathways
+path_img = os.path.join("/Users/gustavchristensen/Desktop/TechLabs/AI/Data/Images/")
+path_img_good = os.path.join("/Users/gustavchristensen/Desktop/TechLabs/AI/Data/Images/Good/")
+path_img_bad = os.path.join("/Users/gustavchristensen/Desktop/TechLabs/AI/Data/Images/Bad/")
+
+## Import URLs ##
+file = "final_df.csv"
+data = pd.read_csv(file)
+
+print(data.info())
+print(data["Performance"].value_counts())
+
+## Downloading images to local folder via loop ##
+for number in range(len(data)):
+    try:
+        imgURL = data["thumbnails"][number]
+        
+        if data["Performance"][number] == "Good":
+            urllib.request.urlretrieve(imgURL, "/Users/gustavchristensen/Desktop/TechLabs/AI/Data/Images/Good/image"+str(number)+".jpg") # Retrieves thumbnails equal to "Good"
+        else:
+            urllib.request.urlretrieve(imgURL, "/Users/gustavchristensen/Desktop/TechLabs/AI/Data/Images/Bad/image"+str(number)+".jpg") # Retrieves thumbnails equal to "Bad"
+    except HTTPError:
+        print("Image "+str(number)+" could not be downloaded") # Prints row number with broken URL
+
+
+## Removes images smaller than 360 x 480 in "Good" folder via loop ##
+for filename in os.listdir(path_img_good):
+    if filename.endswith(".jpg"):
+        im = Image.open(path_img_good+filename)
+        w, h = im.size # Size is a (width, heigh) tuple
+        
+        if(not (h >= 360 and w >= 480)):
+            os.remove(path_img_good+filename)
+    else:
+        continue
+
+## Removes images smaller than 360 x 480 in "Bad" folder via loop ##
+for filename in os.listdir(path_img_bad):
+    if filename.endswith(".jpg"):
+        im = Image.open(path_img_bad+filename)
+        w, h = im.size # Size is a (width, heigh) tuple
+        
+        if(not (h >= 360 and w >= 480)):
+            os.remove(path_img_bad+filename)
+    else:
+        continue
+
+## Number of images
+print('total good images:', len(os.listdir(path_img_good))) # 2780 images
+print('total bad images:', len(os.listdir(path_img_bad))) # 2749 images
+print('total images:', len(os.listdir(path_img_good))+len(os.listdir(path_img_bad)))
+
+## Test-train-validation split ##
+splitfolders.ratio("Images", output="Output", seed=1337, ratio=(0.7, 0.15, 0.15))
+
+
+########################
+### IMAGE CLASSIFIER ###
+########################
+
+## Paths to images
+train_dir = os.path.join('/Users/gustavchristensen/Desktop/TechLabs/AI/Data/Output/train/')
+validation_dir = os.path.join('/Users/gustavchristensen/Desktop/TechLabs/AI/Data/Output/val/')
+test_dir = os.path.join('/Users/gustavchristensen/Desktop/TechLabs/AI/Data/Output/test/')
+
+train_good_dir = os.path.join('/Users/gustavchristensen/Desktop/TechLabs/AI/Data/Output/train/good/')
+train_bad_dir = os.path.join('/Users/gustavchristensen/Desktop/TechLabs/AI/Data/Output/train/bad/')
+
+validation_good_dir = os.path.join('/Users/gustavchristensen/Desktop/TechLabs/AI/Data/Output/val/good/')
+validation_bad_dir = os.path.join('/Users/gustavchristensen/Desktop/TechLabs/AI/Data/Output/val/bad/')
+
+test_good_dir = os.path.join('/Users/gustavchristensen/Desktop/TechLabs/AI/Data/Output/test/good/')
+test_bad_dir = os.path.join('/Users/gustavchristensen/Desktop/TechLabs/AI/Data/Output/test/bad/')
+
+## Number of images
+print('total training good images:', len(os.listdir(train_good_dir))) # 1945 images
+print('total training bad images:', len(os.listdir(train_bad_dir))) # 1923 images
+print('total valid good images:', len(os.listdir(validation_good_dir))) # 416 images
+print('total valid bad images:', len(os.listdir(validation_bad_dir))) # 412 images
+print('total test good images:', len(os.listdir(test_good_dir))) # 418 images
+print('total test bad images:', len(os.listdir(test_bad_dir))) # 413 images
+
+## Data preprocessing
+from keras.preprocessing.image import ImageDataGenerator
+
+train_datagen = ImageDataGenerator(
+    rescale=1./255,
+    rotation_range=40,
+    width_shift_range=0.2,
+    height_shift_range=0.2,
+    shear_range=0.2,
+    zoom_range=0.2,
+    horizontal_flip=True,)
+
+test_datagen = ImageDataGenerator(rescale=1./255)
+
+train_generator = train_datagen.flow_from_directory(
+    train_dir,
+    target_size=(150, 150),
+    batch_size=32,
+    class_mode='binary')
+
+
+validation_generator = test_datagen.flow_from_directory(
+    validation_dir,
+    target_size=(150, 150),
+    batch_size=32,
+    class_mode='binary')
+
+## Instantiating a small convnet for good vs. bad classification
+from keras import layers
+from keras import models
+
+model = models.Sequential()
+model.add(layers.Conv2D(32, (3, 3), activation='relu',
+                        input_shape=(150, 150, 3)))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(layers.Conv2D(64, (3, 3), activation='relu'))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(layers.Conv2D(128, (3, 3), activation='relu'))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(layers.Conv2D(128, (3, 3), activation='relu'))
+model.add(layers.MaxPooling2D((2, 2)))
+model.add(layers.Flatten())
+model.add(layers.Dropout(0.5))
+model.add(layers.Dense(512, activation='relu'))
+model.add(layers.Dense(1, activation='sigmoid'))
+
+model.summary()
+
+## Configuring the model for training
+from keras import optimizers
+
+model.compile(loss='binary_crossentropy',
+              optimizer=optimizers.RMSprop(lr=1e-4),
+              metrics=['acc'])
+
+## Fitting the model using a batch generator
+history = model.fit_generator(
+      train_generator,
+      steps_per_epoch=100,
+      epochs=30,
+      validation_data=validation_generator,
+      validation_steps=50)
+
+## Saving the model
+model.save('good_and_bad_1.h5')
+
+# Model accuracy
+loss, accuracy = model.evaluate(train_generator)
+print("\nModel's Evaluation Metrics: ")
+print("---------------------------")
+print("Accuracy: {} \nLoss: {}".format(accuracy, loss))
+
+## Displaying curves of loss and accuracy during training
+acc = history.history['acc']
+val_acc = history.history['val_acc']
+loss = history.history['loss']
+val_loss = history.history['val_loss']
+
+epochs = range(1, len(acc) + 1)
+
+
+plt.plot(epochs, acc, 'bo', label='Training acc')
+plt.plot(epochs, val_acc, 'b', label='Validation acc')
+plt.title('Training and validation accuracy')
+plt.legend()
+
+plt.figure()
+
+plt.plot(epochs, loss, 'bo', label='Training loss')
+plt.plot(epochs, val_loss, 'b', label='Validation loss')
+plt.title('Training and validation loss')
+plt.legend()
+
+plt.show()
+
+# Evaluate model on test data
+test_generator = test_datagen.flow_from_directory(
+        test_dir,
+        target_size=(150, 150),
+        batch_size=20,
+        class_mode='binary')
+
+test_loss, test_acc = model.evaluate_generator(test_generator, steps=50, verbose=1)
+
+print("\nModel's Evaluation Metrics: ")
+print("---------------------------")
+print("Accuracy: {} \nLoss: {}".format(test_acc, test_loss))
+
+## Class labels
+print(train_generator.class_indices) # {'Bad': 0, 'Good': 1}
+
+## Making Predictions
+from PIL import Image
+import numpy as np
+from skimage import transform
+import tensorflow as tf
+model = tf.keras.models.load_model('good_and_bad_1.h5')
+
+def load(filename):
+   np_image = Image.open(filename)
+   np_image = np.array(np_image).astype('float32')/255
+   np_image = transform.resize(np_image, (150, 150, 3))
+   np_image = np.expand_dims(np_image, axis=0)
+   return np_image
+
+im = Image.open('test.jpg') 
+im.show() # Displays image
+
+image = load('/Users/gustavchristensen/Desktop/TechLabs/AI/Data/test.jpg') # Path to image
+pred = model.predict(image)
+
+if pred[0][0] > 0.5:
+    print("This thumbnail is good")
+else:
+    print("This thumbnail is bad")
+
+
